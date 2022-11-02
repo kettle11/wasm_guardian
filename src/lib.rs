@@ -1,8 +1,29 @@
 pub fn transform_wasm_to_track_memory(bytes: &[u8]) -> Vec<u8> {
     let mut module = walrus::Module::from_buffer(&bytes).unwrap();
 
+    let walrus::Module {
+        exports, globals, ..
+    } = &mut module;
+
+    for global in globals.iter() {
+        if exports.get_exported_global(global.id()).is_none() {
+            exports.add(&format!("{:?}", global.id().index()), global.id());
+        }
+    }
+    // Needing to do this feels like a limitation of Walrus.
+    // There should be a way to mutably iterate the globals.
+    let global_ids: Vec<_> = module.globals.iter().map(|g| g.id()).collect();
+    for global_id in global_ids {
+        module.globals.get_mut(global_id).mutable = true;
+    }
+
+    // Create a unique local identifier, one for each type we'll need to temporarily store.
     let local0 = module.locals.add(walrus::ValType::I32);
-    let local1 = module.locals.add(walrus::ValType::I32);
+    let local1_i32 = module.locals.add(walrus::ValType::I32);
+    let local1_i64 = module.locals.add(walrus::ValType::I64);
+    let local1_i128 = module.locals.add(walrus::ValType::V128);
+    let local1_f32 = module.locals.add(walrus::ValType::F32);
+    let local1_f64 = module.locals.add(walrus::ValType::F64);
 
     let function_type = module
         .types
@@ -32,7 +53,43 @@ pub fn transform_wasm_to_track_memory(bytes: &[u8]) -> Vec<u8> {
             for instruction in instructions.iter_mut() {
                 match &instruction.0 {
                     walrus::ir::Instr::Store(s) => {
+                        let (local1, size) = match s.kind {
+                            walrus::ir::StoreKind::I32 { .. } => {
+                                (local1_i32, std::mem::size_of::<i32>() as _)
+                            }
+                            walrus::ir::StoreKind::I64 { .. } => {
+                                (local1_i64, std::mem::size_of::<i64>() as _)
+                            }
+                            walrus::ir::StoreKind::F32 => {
+                                (local1_f32, std::mem::size_of::<f32>() as _)
+                            }
+                            walrus::ir::StoreKind::F64 => {
+                                (local1_f64, std::mem::size_of::<f64>() as _)
+                            }
+                            walrus::ir::StoreKind::V128 => {
+                                (local1_i128, std::mem::size_of::<i128>() as _)
+                            }
+                            walrus::ir::StoreKind::I32_8 { .. } => {
+                                (local1_i32, std::mem::size_of::<i32>() as _)
+                            }
+                            walrus::ir::StoreKind::I32_16 { .. } => {
+                                (local1_i32, std::mem::size_of::<i32>() as _)
+                            }
+                            walrus::ir::StoreKind::I64_8 { .. } => {
+                                (local1_i64, std::mem::size_of::<i64>() as _)
+                            }
+                            walrus::ir::StoreKind::I64_16 { .. } => {
+                                (local1_i64, std::mem::size_of::<i64>() as _)
+                            }
+                            walrus::ir::StoreKind::I64_32 { .. } => {
+                                (local1_i64, std::mem::size_of::<i64>() as _)
+                            }
+                        };
+
                         new_instructions.extend_from_slice(&[
+                            // Push both args to the store to temporary locals.
+                            // This isn't the most efficient approach but it is simple
+                            // and works for now without more complex analysis.
                             (
                                 walrus::ir::Instr::LocalSet(walrus::ir::LocalSet { local: local1 }),
                                 walrus::InstrLocId::default(),
@@ -46,38 +103,7 @@ pub fn transform_wasm_to_track_memory(bytes: &[u8]) -> Vec<u8> {
                             // but this is simpler for now.
                             (
                                 walrus::ir::Instr::Const(walrus::ir::Const {
-                                    value: walrus::ir::Value::I32(match s.kind {
-                                        walrus::ir::StoreKind::I32 { .. } => {
-                                            std::mem::size_of::<i32>() as _
-                                        }
-                                        walrus::ir::StoreKind::I64 { .. } => {
-                                            std::mem::size_of::<i64>() as _
-                                        }
-                                        walrus::ir::StoreKind::F32 => {
-                                            std::mem::size_of::<f32>() as _
-                                        }
-                                        walrus::ir::StoreKind::F64 => {
-                                            std::mem::size_of::<f64>() as _
-                                        }
-                                        walrus::ir::StoreKind::V128 => {
-                                            std::mem::size_of::<i128>() as _
-                                        }
-                                        walrus::ir::StoreKind::I32_8 { .. } => {
-                                            std::mem::size_of::<i32>() as _
-                                        }
-                                        walrus::ir::StoreKind::I32_16 { .. } => {
-                                            std::mem::size_of::<i32>() as _
-                                        }
-                                        walrus::ir::StoreKind::I64_8 { .. } => {
-                                            std::mem::size_of::<i64>() as _
-                                        }
-                                        walrus::ir::StoreKind::I64_16 { .. } => {
-                                            std::mem::size_of::<i64>() as _
-                                        }
-                                        walrus::ir::StoreKind::I64_32 { .. } => {
-                                            std::mem::size_of::<i64>() as _
-                                        }
-                                    }),
+                                    value: walrus::ir::Value::I32(size),
                                 }),
                                 walrus::InstrLocId::default(),
                             ),
@@ -96,6 +122,7 @@ pub fn transform_wasm_to_track_memory(bytes: &[u8]) -> Vec<u8> {
                             instruction.clone(),
                         ]);
                     }
+                    walrus::ir::Instr::MemoryGrow { .. } => {}
                     _ => {
                         new_instructions.push(instruction.clone());
                     }
@@ -120,7 +147,7 @@ impl<'instr> walrus::ir::Visitor<'instr> for AllBlocks<'instr> {
 
 #[test]
 fn test() {
-    let bytes = std::fs::read("koi.wasm").unwrap();
+    let bytes = std::fs::read("web_run/koi.wasm").unwrap();
     let output = transform_wasm_to_track_memory(&bytes);
-    std::fs::write("koi_out.wasm", &output).unwrap();
+    std::fs::write("output.wasm", &output).unwrap();
 }
