@@ -25,13 +25,6 @@ pub fn transform_wasm_to_track_changes(bytes: &[u8]) -> Vec<u8> {
             }
         }
     }
-    // Needing to do this feels like a limitation of Walrus.
-    // There should be a way to mutably iterate the globals.
-
-    let global_ids: Vec<_> = module.globals.iter().map(|g| g.id()).collect();
-    for global_id in global_ids {
-        module.globals.get_mut(global_id).mutable = true;
-    }
 
     // Create a unique local identifier, one for each type we'll need to temporarily store.
     let local0 = module.locals.add(walrus::ValType::I32);
