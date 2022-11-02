@@ -1,13 +1,13 @@
 /// Transforms a WebAssembly binary to report to the host environment whenever it makes persistent state changes.
 ///
-/// If memory is modified the imported function` __wg_mem_log` will be called with an i32 of the
+/// If memory is modified the imported function `on_store` will be called with an i32 of the
 /// address changed and an i32 of the size of the location modified.
 ///
-/// If the WebAssembly grows the memory the imported function `__wg_grow` will be called with the
+/// If the WebAssembly grows the memory the imported function `on_grow` will be called with the
 /// number of WebAssembly pages to be allocated.
 ///
-/// When a global is set "__wg_global_set" is called with an i32 that corresponds to an exported global
-/// named "wg_global_n" where n is replace with the i32.
+/// When a global is set "on_global_set" is called with an i32 that corresponds to an exported global
+/// named "wg_global_n" where n is replaced with the i32.
 pub fn transform_wasm_to_track_changes(bytes: &[u8]) -> Vec<u8> {
     let mut module = walrus::Module::from_buffer(&bytes).unwrap();
 
@@ -45,13 +45,15 @@ pub fn transform_wasm_to_track_changes(bytes: &[u8]) -> Vec<u8> {
         .types
         .add(&[walrus::ValType::I32, walrus::ValType::I32], &[]);
     let mem_log_function = module
-        .add_import_func("env", "__wg_mem_log", function_type)
+        .add_import_func("wasm_guardian", "on_store", function_type)
         .0;
 
     let function_type = module.types.add(&[walrus::ValType::I32], &[]);
-    let grow_function = module.add_import_func("env", "__wg_grow", function_type).0;
+    let grow_function = module
+        .add_import_func("wasm_guardian", "on_grow", function_type)
+        .0;
     let global_set_function = module
-        .add_import_func("env", "__wg_global_set", function_type)
+        .add_import_func("wasm_guardian", "on_global_set", function_type)
         .0;
 
     let mut new_instructions = Vec::new();
