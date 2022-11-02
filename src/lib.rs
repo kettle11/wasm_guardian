@@ -28,9 +28,12 @@ pub fn transform_wasm_to_track_memory(bytes: &[u8]) -> Vec<u8> {
     let function_type = module
         .types
         .add(&[walrus::ValType::I32, walrus::ValType::I32], &[]);
-    let mem_log = module
+    let mem_log_function = module
         .add_import_func("env", "__wg_mem_log", function_type)
         .0;
+
+    let function_type = module.types.add(&[walrus::ValType::I32], &[]);
+    let grow_function = module.add_import_func("env", "__wg_grow", function_type).0;
 
     let mut new_instructions = Vec::new();
     let mut blocks = Vec::new();
@@ -108,7 +111,9 @@ pub fn transform_wasm_to_track_memory(bytes: &[u8]) -> Vec<u8> {
                                 walrus::InstrLocId::default(),
                             ),
                             (
-                                walrus::ir::Instr::Call(walrus::ir::Call { func: mem_log }),
+                                walrus::ir::Instr::Call(walrus::ir::Call {
+                                    func: mem_log_function,
+                                }),
                                 walrus::InstrLocId::default(),
                             ),
                             (
@@ -122,7 +127,26 @@ pub fn transform_wasm_to_track_memory(bytes: &[u8]) -> Vec<u8> {
                             instruction.clone(),
                         ]);
                     }
-                    // walrus::ir::Instr::MemoryGrow { .. } => {}
+                    walrus::ir::Instr::MemoryGrow { .. } => {
+                        // Report memory grows
+                        new_instructions.extend_from_slice(&[
+                            (
+                                walrus::ir::Instr::LocalTee(walrus::ir::LocalTee { local: local0 }),
+                                walrus::InstrLocId::default(),
+                            ),
+                            (
+                                walrus::ir::Instr::Call(walrus::ir::Call {
+                                    func: grow_function,
+                                }),
+                                walrus::InstrLocId::default(),
+                            ),
+                            (
+                                walrus::ir::Instr::LocalGet(walrus::ir::LocalGet { local: local0 }),
+                                walrus::InstrLocId::default(),
+                            ),
+                            instruction.clone(),
+                        ]);
+                    }
                     _ => {
                         new_instructions.push(instruction.clone());
                     }
