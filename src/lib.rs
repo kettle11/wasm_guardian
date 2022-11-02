@@ -122,7 +122,7 @@ pub fn transform_wasm_to_track_memory(bytes: &[u8]) -> Vec<u8> {
                             instruction.clone(),
                         ]);
                     }
-                    walrus::ir::Instr::MemoryGrow { .. } => {}
+                    // walrus::ir::Instr::MemoryGrow { .. } => {}
                     _ => {
                         new_instructions.push(instruction.clone());
                     }
