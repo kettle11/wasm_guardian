@@ -1,19 +1,20 @@
 <html>
 <script>
-    WebAssembly.instantiateStreaming(fetch("output.wasm"), {
-        env: {
-            __wg_mem_log: function (location, size) {
-                console.log("__wg_mem_log CALLED: ", location, size);
-            }
+    WebAssembly.instantiateStreaming(fetch("example_entity.wasm"), {
+        wasm_guardian: {
+            on_store: function (location, size) {
+                console.log("on_store called: ", location, size);
+            },
+            on_grow: function (pages) {
+                console.log("on_grow called: ", pages);
+            },
+            on_global_set: function (global_id) {
+                console.log("on_global_set called: ", global_id);
+            },
         }
     }).then(
         (obj) => {
-            // Call an exported function:
-            obj.instance.exports.store_in_mem();
-
-            // or access the buffer contents of an exported memory:
-            const i32 = new Uint32Array(obj.instance.exports.memory.buffer);
-
+            console.log(obj.instance.exports);
         }
     );
 </script>
