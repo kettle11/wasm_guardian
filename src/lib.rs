@@ -1,4 +1,14 @@
-pub fn transform_wasm_to_track_memory(bytes: &[u8]) -> Vec<u8> {
+/// Transforms a WebAssembly binary to report to the host environment whenever it makes persistent state changes.
+///
+/// If memory is modified the imported function` __wg_mem_log` will be called with an i32 of the
+/// address changed and an i32 of the size of the location modified.
+///
+/// If the WebAssembly grows the memory the imported function `__wg_grow` will be called with the
+/// number of WebAssembly pages to be allocated.
+///
+/// When a global is set "__wg_global_set" is called with an i32 that corresponds to an exported global
+/// named "wg_global_n" where n is replace with the i32.
+pub fn transform_wasm_to_track_changes(bytes: &[u8]) -> Vec<u8> {
     let mut module = walrus::Module::from_buffer(&bytes).unwrap();
 
     let walrus::Module {
@@ -6,12 +16,18 @@ pub fn transform_wasm_to_track_memory(bytes: &[u8]) -> Vec<u8> {
     } = &mut module;
 
     for global in globals.iter() {
-        if exports.get_exported_global(global.id()).is_none() {
-            exports.add(&format!("{:?}", global.id().index()), global.id());
+        if global.mutable {
+            match global.kind {
+                walrus::GlobalKind::Local(walrus::InitExpr::Value(..)) => {
+                    exports.add(&format!("wg_global_{:?}", global.id().index()), global.id());
+                }
+                _ => {}
+            }
         }
     }
     // Needing to do this feels like a limitation of Walrus.
     // There should be a way to mutably iterate the globals.
+
     let global_ids: Vec<_> = module.globals.iter().map(|g| g.id()).collect();
     for global_id in global_ids {
         module.globals.get_mut(global_id).mutable = true;
@@ -34,6 +50,9 @@ pub fn transform_wasm_to_track_memory(bytes: &[u8]) -> Vec<u8> {
 
     let function_type = module.types.add(&[walrus::ValType::I32], &[]);
     let grow_function = module.add_import_func("env", "__wg_grow", function_type).0;
+    let global_set_function = module
+        .add_import_func("env", "__wg_global_set", function_type)
+        .0;
 
     let mut new_instructions = Vec::new();
     let mut blocks = Vec::new();
@@ -147,6 +166,23 @@ pub fn transform_wasm_to_track_memory(bytes: &[u8]) -> Vec<u8> {
                             instruction.clone(),
                         ]);
                     }
+                    walrus::ir::Instr::GlobalSet(global_set) => {
+                        new_instructions.extend_from_slice(&[
+                            instruction.clone(),
+                            (
+                                walrus::ir::Instr::Const(walrus::ir::Const {
+                                    value: walrus::ir::Value::I32(global_set.global.index() as i32),
+                                }),
+                                walrus::InstrLocId::default(),
+                            ),
+                            (
+                                walrus::ir::Instr::Call(walrus::ir::Call {
+                                    func: global_set_function,
+                                }),
+                                walrus::InstrLocId::default(),
+                            ),
+                        ]);
+                    }
                     _ => {
                         new_instructions.push(instruction.clone());
                     }
@@ -171,7 +207,7 @@ impl<'instr> walrus::ir::Visitor<'instr> for AllBlocks<'instr> {
 
 #[test]
 fn test() {
-    let bytes = std::fs::read("web_run/koi.wasm").unwrap();
-    let output = transform_wasm_to_track_memory(&bytes);
+    let bytes = std::fs::read("koi.wasm").unwrap();
+    let output = transform_wasm_to_track_changes(&bytes);
     std::fs::write("output.wasm", &output).unwrap();
 }
