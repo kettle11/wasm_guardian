@@ -4,5 +4,5 @@ A nearly untested library that transforms a WebAssembly binary to report wheneve
 
 Todo:
 
-* Report when globals are set.
-* Report when memory is grown.
+* Tests
+* Research ways to opt-out stack memory from tracking.
