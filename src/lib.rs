@@ -163,7 +163,6 @@ pub fn transform_wasm_to_track_changes(bytes: &[u8]) -> Vec<u8> {
                     }
                     walrus::ir::Instr::GlobalSet(global_set) => {
                         new_instructions.extend_from_slice(&[
-                            instruction.clone(),
                             (
                                 walrus::ir::Instr::Const(walrus::ir::Const {
                                     value: walrus::ir::Value::I32(global_set.global.index() as i32),
@@ -176,6 +175,7 @@ pub fn transform_wasm_to_track_changes(bytes: &[u8]) -> Vec<u8> {
                                 }),
                                 walrus::InstrLocId::default(),
                             ),
+                            instruction.clone(),
                         ]);
                     }
                     _ => {
