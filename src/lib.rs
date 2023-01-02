@@ -1,12 +1,14 @@
+use std::iter::Peekable;
+
 /// Transforms a WebAssembly binary to report to the host environment whenever it makes persistent state changes.
 ///
-/// If memory is modified the imported function `on_store` will be called with an i32 of the
+/// Before memory is modified the imported function `on_store` will be called with an i32 of the
 /// address changed and an i32 of the size of the location modified.
 ///
-/// If the WebAssembly grows the memory the imported function `on_grow` will be called with the
+/// Before the WebAssembly grows the memory the imported function `on_grow` will be called with the
 /// number of WebAssembly pages to be allocated.
 ///
-/// When a global is set "on_global_set" is called with an i32 that corresponds to an exported global
+/// Before a global is set "on_global_set" is called with an i32 that corresponds to an exported global
 /// named "wg_global_n" where n is replaced with the i32.
 pub fn transform_wasm_to_track_changes(bytes: &[u8]) -> Vec<u8> {
     let mut module = walrus::Module::from_buffer(&bytes).unwrap();
@@ -64,10 +66,11 @@ pub fn transform_wasm_to_track_changes(bytes: &[u8]) -> Vec<u8> {
 
         for block in &mut blocks {
             let instructions = &mut function.block_mut(*block).instrs;
+            let instructions_iter = &mut instructions.iter().peekable();
             new_instructions.clear();
             new_instructions.reserve(instructions.len());
 
-            for instruction in instructions.iter_mut() {
+            while let Some(instruction) = instructions_iter.next() {
                 match &instruction.0 {
                     walrus::ir::Instr::Store(s) => {
                         let (local1, size) = match s.kind {
@@ -163,7 +166,6 @@ pub fn transform_wasm_to_track_changes(bytes: &[u8]) -> Vec<u8> {
                     }
                     walrus::ir::Instr::GlobalSet(global_set) => {
                         new_instructions.extend_from_slice(&[
-                            instruction.clone(),
                             (
                                 walrus::ir::Instr::Const(walrus::ir::Const {
                                     value: walrus::ir::Value::I32(global_set.global.index() as i32),
@@ -176,7 +178,11 @@ pub fn transform_wasm_to_track_changes(bytes: &[u8]) -> Vec<u8> {
                                 }),
                                 walrus::InstrLocId::default(),
                             ),
+                            instruction.clone(),
                         ]);
+                    }
+                    walrus::ir::Instr::GlobalGet(global_get) => {
+                        check_for_stack_opening_sequence(instructions_iter);
                     }
                     _ => {
                         new_instructions.push(instruction.clone());
@@ -188,6 +194,62 @@ pub fn transform_wasm_to_track_changes(bytes: &[u8]) -> Vec<u8> {
     }
 
     module.emit_wasm()
+}
+
+fn check_for_stack_opening_sequence(
+    iter: &mut Peekable<core::slice::Iter<(walrus::ir::Instr, walrus::ir::InstrLocId)>>,
+) {
+    // Checking for this sequence (the line is already handled)
+    // global.get 0
+    // i32.const 16
+    // i32.sub
+    // local.tee 2
+    // global.set 0
+
+    let value_increment = if let Some((walrus::ir::Instr::Const(n), _)) = iter.peek() {
+        let v = match n.value {
+            walrus::ir::Value::I32(i32) => i32,
+            _ => return,
+        };
+
+        let _ = iter.next();
+        v
+    } else {
+        return;
+    };
+
+    match iter.peek() {
+        Some((
+            walrus::ir::Instr::Binop(walrus::ir::Binop {
+                op: walrus::ir::BinaryOp::I32Sub,
+            }),
+            _,
+        )) => iter.next(),
+        v => {
+            // println!("V0: {:?}", v);
+            // println!("VALUE INCREMENT: {:?}", value_increment);
+            return;
+        }
+    };
+
+    match iter.peek() {
+        Some((walrus::ir::Instr::LocalTee(walrus::ir::LocalTee { local }), _)) => {
+            iter.next();
+        }
+        v => {
+            println!("V1: {:?}", v);
+            return;
+        }
+    };
+    match iter.peek() {
+        Some((walrus::ir::Instr::GlobalSet(walrus::ir::GlobalSet { .. }), _)) => iter.next(),
+        v => {
+            println!("V2: {:?}", v);
+            return;
+        }
+    };
+
+    println!("STACK INCREMENT DETECTED!");
 }
 
 struct AllBlocks<'a> {
@@ -202,7 +264,7 @@ impl<'instr> walrus::ir::Visitor<'instr> for AllBlocks<'instr> {
 
 #[test]
 fn test() {
-    let bytes = std::fs::read("koi.wasm").unwrap();
+    let bytes = std::fs::read("web_run/example_entity_release.wasm").unwrap();
     let output = transform_wasm_to_track_changes(&bytes);
     std::fs::write("output.wasm", &output).unwrap();
 }
