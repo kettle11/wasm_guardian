@@ -115,6 +115,31 @@ pub fn transform_wasm_to_track_changes(bytes: &[u8]) -> Vec<u8> {
                                 walrus::ir::Instr::LocalTee(walrus::ir::LocalTee { local: local0 }),
                                 walrus::InstrLocId::default(),
                             ),
+                        ]);
+
+                        // If there is an offset then add that to the returned address.
+                        if s.arg.offset != 0 {
+                            new_instructions.extend_from_slice(&[
+                                // Push both args to the store to temporary locals.
+                                // This isn't the most efficient approach but it is simple
+                                // and works for now without more complex analysis.
+                                (
+                                    walrus::ir::Instr::Const(walrus::ir::Const {
+                                        value: walrus::ir::Value::I32(s.arg.offset as _),
+                                    }),
+                                    walrus::InstrLocId::default(),
+                                ),
+                                (
+                                    // This is operating on memory addresses, is this the correct type of add?
+                                    walrus::ir::Instr::Binop(walrus::ir::Binop {
+                                        op: walrus::ir::BinaryOp::I32Add,
+                                    }),
+                                    walrus::InstrLocId::default(),
+                                ),
+                            ]);
+                        }
+
+                        new_instructions.extend_from_slice(&[
                             // Output the size of the memory being written.
                             // An alternative approach would be to implement a function export for each type,
                             // but this is simpler for now.
